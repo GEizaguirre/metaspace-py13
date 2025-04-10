@@ -250,7 +250,7 @@ def validate_ds_segments(fexec, imzml_reader, ds_segments_bounds, ds_segms_cobjs
                 'n_rows': len(segm),
                 'min_mz': segm.mz.min(),
                 'max_mz': segm.mz.max(),
-                'is_sorted': segm.mz.is_monotonic,
+                'is_sorted': segm.mz.is_monotonic_increasing
             }
         )
 

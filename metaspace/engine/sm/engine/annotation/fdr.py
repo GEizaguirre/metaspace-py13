@@ -74,9 +74,12 @@ def score_to_fdr_map(
             are going to be somehow manipulated (e.g. averaged over several rankings) before being
             made monotonic.
     """
-    target_hits = pd.Series(target_scores, name='target').value_counts()
-    decoy_hits = pd.Series(decoy_scores, name='decoy').value_counts()
+    target_hits = pd.Series(target_scores).value_counts()
+    target_hits.name = 'target'
+    decoy_hits = pd.Series(decoy_scores).value_counts()
+    decoy_hits.name = 'decoy'
     counts_df = pd.concat([target_hits, decoy_hits], axis=1).fillna(0).sort_index(ascending=False)
+    print(counts_df)
     cumulative_targets = counts_df.target.cumsum()
     cumulative_decoys = counts_df.decoy.cumsum()
     if rule_of_succession:

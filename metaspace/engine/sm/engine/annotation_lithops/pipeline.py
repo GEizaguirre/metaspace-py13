@@ -96,6 +96,7 @@ class Pipeline:  # pylint: disable=too-many-instance-attributes
     def run_pipeline(
         self, debug_validate=False, use_cache=True, perform_enrichment=False
     ) -> Tuple[Dict[int, pd.DataFrame], List[CObj[List[Tuple[int, bytes]]]], Any]:
+
         # pylint: disable=unexpected-keyword-arg
         self.prepare_moldb(debug_validate=debug_validate)
 

@@ -281,7 +281,7 @@ class PngGenerator:
                 (250, 230, 34),
                 (253, 231, 36),
             ],
-            dtype=np.float,
+            dtype=np.float64,
         )
         self._colors = np.c_[colors, np.ones_like(colors[:, 0])]
 

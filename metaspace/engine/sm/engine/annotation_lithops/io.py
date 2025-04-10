@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 import logging
 import pickle
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -7,6 +8,8 @@ from typing import TypeVar, Generic, List, Iterable, overload, Any, Tuple, Union
 
 import uuid
 import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
 import pyarrow as pa
 from lithops.storage import Storage
 from lithops.storage.utils import CloudObject
@@ -42,15 +45,20 @@ def deserialize_from_file(path):
 
 
 def serialize(obj):
-    try:
-        return pa.serialize(obj).to_buffer().to_pybytes()
-    except pa.lib.SerializationCallbackError:
+    if isinstance(obj, pd.DataFrame):
+        table = pa.Table.from_pandas(obj)
+        buffer = BytesIO()
+        pq.write_table(table, buffer, compression='snappy')
+        return buffer.getvalue()
+    else:
         return pickle.dumps(obj)
 
 
 def deserialize(data):
     try:
-        return pa.deserialize(data)
+        buffer = BytesIO(data)
+        table = pq.read_table(buffer)
+        return table.to_pandas()
     except (pa.lib.ArrowInvalid, OSError):
         return pickle.loads(data)
 

@@ -240,7 +240,7 @@ def validate_centroid_segments(fexec, db_segms_cobjs, ds_segms_bounds, isocalc_w
                     .peak_i.apply(lambda peak_is: len(set(range(max(peak_is))) - set(peak_is)))
                     .sum()
                 ),
-                'is_sorted': segm.mz.is_monotonic,
+                'is_sorted': segm.mz.is_monotonic_increasing,
                 'n_formulas': segm.formula_i.nunique(),
             }
         )

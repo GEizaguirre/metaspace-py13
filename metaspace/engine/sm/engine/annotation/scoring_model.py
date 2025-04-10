@@ -9,7 +9,6 @@ from typing import List, Tuple, Dict, Optional, Union
 
 import numpy as np
 import pandas as pd
-from catboost import CatBoost
 
 from sm.engine.errors import SMError
 from sm.engine.storage import get_s3_client
@@ -143,48 +142,6 @@ def find_by_id(id_: int) -> ScoringModel:
     return ScoringModel(**data)
 
 
-class CatBoostScoringModel(ScoringModel):
-    def __init__(
-        self, model_name: str, model: CatBoost, params: Dict, id_: int, name: str, version: str
-    ):
-        super().__init__(id_, name, version)
-        self.model_name = model_name
-        self.model = model
-        self.features = params['features']
-
-    def score(
-        self, target_df: pd.DataFrame, decoy_df: pd.DataFrame, decoy_ratio: float
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        target_df = target_df.copy(deep=False)
-        decoy_df = decoy_df.copy(deep=False)
-
-        add_derived_features(target_df, decoy_df, decoy_ratio, self.features)
-
-        target_df['msm'] = self.model.predict(target_df[self.features])
-        decoy_df['msm'] = self.model.predict(decoy_df[self.features])
-
-        # WORKAROUND: Annotations with 0/NaN spectral, spatial or chaos were excluded from training
-        # because they seemed to reduce the overall performance of the models. Because of this,
-        # models still give some valid score these annotations which sometimes leads to them
-        # passing FDR filtering. Future work may be able to find a way to sometimes rescue these
-        # annotations, but for now they just need to be excluded because the model doesn't know
-        # how to handle them.
-        # For now, just directly set their MSM to 0 to force their removal
-        target_df.loc[lambda df: (df.spatial * df.spectral * df.chaos).fillna(0) <= 0, 'msm'] = 0
-        decoy_df.loc[lambda df: (df.spatial * df.spectral * df.chaos).fillna(0) <= 0, 'msm'] = 0
-
-        # The CatBoost models are normalized to 0-1 for the training data, but it's still possible
-        # for the model to predict values outside this range for unseen data.
-        # Values > 1.0 are a mainly cosmetic problem
-        # Values < 0.0 would change the behavior of the worst-case FDR bin
-        target_df.msm.clip(0.0, 1.0, inplace=True)
-        decoy_df.msm.clip(0.0, 1.0, inplace=True)
-
-        remove_uninteresting_features(target_df, decoy_df)
-
-        return target_df, decoy_df
-
-
 class MsmScoringModel(ScoringModel):
     def score(
         self, target_df: pd.DataFrame, decoy_df: pd.DataFrame, decoy_ratio: float
@@ -211,20 +168,7 @@ def load_scoring_model(name: Optional[str], version: Optional[str] = None) -> Sc
     assert row, f'Scoring model {name} {version} not found'
     type_, params, id_ = row
 
-    if type_ == 'catboost':
-        bucket, key = split_s3_path(params['s3_path'])
-        with TemporaryDirectory() as tmpdir:
-            model_file = Path(tmpdir) / 'model.cbm'
-            with model_file.open('wb') as f:
-                f.write(get_s3_client().get_object(Bucket=bucket, Key=key)['Body'].read())
-            model = CatBoost()
-            model.load_model(str(model_file), 'cbm')
-
-        return CatBoostScoringModel(name, model, params, id_, name, version)
-    elif type_ == 'original':
-        return MsmScoringModel()
-    else:
-        raise ValueError(f'Unsupported scoring model type: {type_}')
+    return MsmScoringModel()
 
 
 def load_scoring_model_by_id(id_: Optional[int] = None) -> ScoringModel:
@@ -256,79 +200,6 @@ def load_scoring_model_by_id(id_: Optional[int] = None) -> ScoringModel:
         return MsmScoringModel()
     else:
         raise ValueError(f'Unsupported scoring model type: {type_}')
-
-
-def upload_catboost_scoring_model(
-    model: Union[CatBoost, Path, str],
-    bucket: str,
-    prefix: str,
-    is_public: bool,
-    train_data: pd.DataFrame = None,
-):
-    """
-    Args:
-        model: The catboost model or path to the CBM file. Must be trained on a DataFrame so that
-               feature names are included
-        bucket: Destination S3/MinIO bucket
-        prefix: S3/MinIO prefix
-        is_public: True to save with a 'public-read' ACL. False to use the bucket's default ACL
-        train_data: (Optional) If provided it will be saved alongside the model. Not needed for
-                    anything, but it may make future work easier.
-    """
-    version = None
-    if isinstance(model, (Path, str)):
-        model_path = Path(model)
-        model = CatBoost().load_model(str(model_path), format='cbm')
-        version_match = re.fullmatch(r'model-(.*)\.cbm', model_path.name)
-        if version_match is not None:
-            # Copy the version from the filename if there is one
-            version = version_match[1]
-
-    features = model.feature_names_
-    assert features, 'Model should have feature_names_ set'
-
-    with TemporaryDirectory() as tmpdir:
-        # Save CBM (small, faster to load) and JSON (in case it's needed for forward compatibility)
-        cbm_path = Path(tmpdir) / 'model.cbm'
-        json_path = Path(tmpdir) / 'model.json'
-        model.save_model(str(cbm_path), format='cbm')
-        model.save_model(str(json_path), format='json')
-
-        if version is None:
-            # Add a timestamp and hash to the model path as a crude versioning mechanism,
-            # so that it's possible to recover if the model is accidentally reuploaded
-            timestamp = datetime.now().isoformat().replace(':', '-')
-            version = f'{timestamp}-{sha1(cbm_path.read_bytes()).hexdigest()[:8]}'
-
-        cbm_key = f'{prefix}/model-{version}.cbm'
-        json_key = f'{prefix}/model-{version}.json'
-
-        # Create the bucket if necessary
-        s3_client = get_s3_client()
-        try:
-            s3_client.head_bucket(Bucket=bucket)
-        except Exception:
-            print(f"Couldn't find bucket {bucket}, creating...")
-            s3_client.create_bucket(Bucket=bucket)
-
-        acl = {'ACL': 'public-read'} if is_public else {}
-        logger.info(f'Uploading CBM model to s3://{bucket}/{cbm_key}')
-        s3_client.put_object(Bucket=bucket, Key=cbm_key, Body=cbm_path.read_bytes(), **acl)
-        logger.info(f'Uploading JSON model to s3://{bucket}/{json_key}')
-        s3_client.put_object(Bucket=bucket, Key=json_key, Body=json_path.read_bytes(), **acl)
-
-        # Upload training data
-        if train_data is not None:
-            data_path = Path(tmpdir) / 'train_data.parquet'
-            train_data.to_parquet(data_path)
-            data_key = f'{prefix}/train_data-{version}.parquet'
-            logger.info(f'Uploading training data to to s3://{bucket}/{data_key}')
-            s3_client.put_object(Bucket=bucket, Key=data_key, Body=data_path.read_bytes(), **acl)
-
-    return {
-        's3_path': f's3://{bucket}/{cbm_key}',
-        'features': features,
-    }
 
 
 def save_scoring_model_to_db(name, type_, version, params, created_dt=None):

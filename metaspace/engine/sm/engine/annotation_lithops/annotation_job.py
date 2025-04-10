@@ -221,7 +221,7 @@ class LocalAnnotationJob:
             cache_key=cache_key,
             use_db_cache=use_cache,
             use_db_mutex=False,
-            lithops_config=sm_config['lithops'],
+            lithops_config=sm_config['lithops']
         )
 
     def run(self, save=True, **kwargs):

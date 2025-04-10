@@ -195,7 +195,7 @@ def read_ds_segments(
         row_start, row_end = 0, 0
         for segm_i, cobj in enumerate(ds_segms_cobjs):
             sub_sp_df = load_cobj(storage, cobj)
-            assert sub_sp_df.mz.is_monotonic
+            assert sub_sp_df.mz.is_monotonic_increasing
             assert len(sub_sp_df) == ds_segm_lens[segm_i], 'unexpected ds_segm length'
             row_end = row_start + len(sub_sp_df)
             print(
@@ -211,7 +211,7 @@ def read_ds_segments(
     else:
         sp_df = pd.concat(load_cobjs(storage, ds_segms_cobjs), ignore_index=True, sort=False)
 
-    assert sp_df.mz.is_monotonic
+    assert sp_df.mz.is_monotonic_increasing
 
     return sp_df
 
